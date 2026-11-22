@@ -52,12 +52,19 @@ body {
 .board .now span { color: var(--accent); font-weight: 600; }
 
 .map { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
-.mapbox { position: relative; height: 260px; background: var(--map-bg); overflow: hidden; }
+.mapbox { position: relative; height: 260px; background: var(--map-bg); overflow: hidden; touch-action: none; cursor: grab; user-select: none; -webkit-user-select: none; }
+.mapbox:active { cursor: grabbing; }
 .tiles { position: absolute; inset: 0; }
 .tiles img { position: absolute; max-width: none; user-select: none; -webkit-user-drag: none; }
 .mapbox svg { position: absolute; inset: 0; width: 100%; height: 100%; }
 .attrib { position: absolute; right: 0; bottom: 0; font-size: 10px; line-height: 1.5; background: rgba(255,255,255,.85); color: #2f3b41; padding: 0 6px; text-decoration: none; }
 .mapnote { margin: 0; padding: 8px 12px; }
+.mapctl { position: absolute; display: flex; gap: 6px; z-index: 2; }
+.mapctl.zoom { top: 8px; right: 8px; flex-direction: column; }
+.mapctl.modes { top: 8px; left: 8px; flex-wrap: wrap; max-width: calc(100% - 64px); }
+.mapctl button { flex: none; min-width: 40px; height: 40px; padding: 0 12px; border-radius: 6px; border: 1px solid #b4bfc4; background: rgba(255,255,255,.94); color: #2f3b41; font: 600 20px/1 var(--font-body); cursor: pointer; }
+.mapctl.modes button { height: 34px; min-width: 0; font-size: 12.5px; }
+.mapctl button[aria-pressed="true"] { background: #d97706; border-color: #d97706; color: #fff; }
 .m-case { fill: none; stroke: var(--map-halo); stroke-width: 8; stroke-linecap: round; stroke-linejoin: round; opacity: .9; }
 .m-route { fill: none; stroke: var(--map-route); stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
 .m-done { fill: none; stroke: var(--map-done); stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
@@ -98,7 +105,7 @@ details .inner { display: grid; gap: 12px; margin-top: 12px; }
 <div class="wrap">
   <div>
     <div class="tag">Prototyp</div>
-    <div class="demo-note">Linka 1601 má skutečné body zastávek a funguje i s GPS. Linka 1602 zatím souřadnice nemá, její simulace jede po vymyšlené trase a GPS se zapne po doplnění bodů „příští zastávka“ a „jsme na zastávce“. T1 je testovací linka s vymyšlenými souřadnicemi.</div>
+    <div class="demo-note">Linka 1601 má skutečné body zastávek (tři konečné: Hlavní nádraží, Podzámčí, Roudnička) a funguje i s GPS. Linka 1602 zatím souřadnice nemá, její simulace jede po vymyšlené trase a GPS se zapne po doplnění bodů „příští zastávka“ a „jsme na zastávce“. T1 je testovací linka s vymyšlenými souřadnicemi.</div>
   </div>
 
   <div class="head">
@@ -117,6 +124,14 @@ details .inner { display: grid; gap: 12px; margin-top: 12px; }
     <div class="mapbox" id="mapbox">
       <div class="tiles" id="tiles"></div>
       <svg id="svg" role="img" aria-label="Trasa linky s polohou vozidla"></svg>
+      <div class="mapctl zoom" role="group" aria-label="Přiblížení mapy">
+        <button type="button" id="btnZoomIn" aria-label="Přiblížit">+</button>
+        <button type="button" id="btnZoomOut" aria-label="Oddálit">−</button>
+      </div>
+      <div class="mapctl modes">
+        <button type="button" id="btnFit">Celá trasa</button>
+        <button type="button" id="btnFollow" aria-pressed="false">Sledovat vozidlo</button>
+      </div>
       <a class="attrib" id="attrib" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener" hidden>© OpenStreetMap</a>
     </div>
     <p class="hint mapnote" id="mapNote" hidden></p>
@@ -169,8 +184,9 @@ details .inner { display: grid; gap: 12px; margin-top: 12px; }
       <div class="field">
         <label for="fileAudio">Vlastní hlášení (audio soubory)</label>
         <input type="file" id="fileAudio" accept="audio/*" multiple>
-        <p class="hint">Název souboru: zastávka je její název (např. <code>Hlavní nádraží.mp3</code>), „příští“ je <code>příští Hlavní nádraží.mp3</code>, konečná je <code>konečná Hlavní nádraží.mp3</code>. Diakritika, velká písmena a mezery nevadí. Navíc jde přidat <code>na znamení</code>, <code>prosíme vystupte</code>, <code>počáteční</code> a <code>gong</code>. Co chybí, přečte syntéza řeči. Na GitHub Pages se soubory ze složky <code>audio</code> v repozitáři načtou samy.</p>
+        <p class="hint">Název souboru: zastávka je její název (např. <code>Hlavní nádraží.mp3</code>), „příští“ je <code>příští Hlavní nádraží.mp3</code>, konečná je <code>konečná Hlavní nádraží.mp3</code>. Diakritika, velká písmena a mezery nevadí. Navíc jde přidat <code>na znamení</code>, <code>prosíme vystupte</code> a <code>gong</code>. Co chybí, přečte syntéza řeči. Vybrané nahrávky se uloží do prohlížeče a zůstanou tam i po zavření stránky. Na GitHub Pages se soubory ze složky <code>audio</code> v repozitáři načtou samy.</p>
       </div>
+      <button id="btnClearAudio" type="button">Smazat uložené nahrávky</button>
       <p class="hint" id="voiceInfo"></p>
     </div>
   </details>
@@ -274,11 +290,42 @@ const C1601 = {
   kavak: { pre: { lat: 50.218975, lon: 15.807972 }, at: { lat: 50.217210, lon: 15.806622 } },
   zizkov: { pre: { lat: 50.216586, lon: 15.805327 }, at: { lat: 50.215178, lon: 15.803141 } },
   zvu: { pre: { lat: 50.211602, lon: 15.804239 }, at: { lat: 50.209987, lon: 15.806161 } },
-  "hlavni-nadrazi": { pre: { lat: 50.210922, lon: 15.808874 }, at: { lat: 50.212933, lon: 15.812482 } }
+  "hlavni-nadrazi": { pre: { lat: 50.210922, lon: 15.808874 } }
 };
+// Linka 16 (kód 1601): jedna trasa z Kozlovky, tři možné konečné. Hlavní nádraží má jako konečná jiný bod než při průjezdu,
+// Podzámčí také. Směr Roudnička pokračuje přes Podzámčí.
+const withPos = s => ({ ...s, ...C1601[s.id] });
+const L16_HEAD = L16.slice(0, 10).map(withPos);
+const HN_PRE = C1601['hlavni-nadrazi'].pre;
+const HN_END = { id: 'hlavni-nadrazi', name: 'Hlavní nádraží', pre: HN_PRE, at: { lat: 50.214283, lon: 15.811940 } };
+const HN_THRU = { ...HN_END, at: { lat: 50.213753, lon: 15.812762 } };
+const L16_MID = [
+  { id: 'tesco-atrium', name: 'Obchodní domy Tesco a Atrium', pre: { lat: 50.213694, lon: 15.814054 }, at: { lat: 50.213673, lon: 15.819004 } },
+  { id: 'central', name: 'Centrál', pre: { lat: 50.213891, lon: 15.821343 }, at: { lat: 50.213459, lon: 15.822924 } },
+  { id: 'muzeum', name: 'Muzeum', pre: { lat: 50.212508, lon: 15.826350 }, at: { lat: 50.212154, lon: 15.829738 } },
+  { id: 'adalbertinum', name: 'Adalbertinum', pre: { lat: 50.211513, lon: 15.831120 }, at: { lat: 50.210590, lon: 15.830086 } },
+  { id: 'zimni-stadion', name: 'Zimní stadion', pre: { lat: 50.207594, lon: 15.828568 }, at: { lat: 50.207077, lon: 15.832288 } },
+  { id: 'kampus-uhk', name: 'Kampus Univerzita Hradec Králové', pre: { lat: 50.204543, lon: 15.831759 }, at: { lat: 50.203274, lon: 15.831932 } },
+  { id: 'fakultni-nemocnice', name: 'Fakultní nemocnice Univerzita Karlova', pre: { lat: 50.200875, lon: 15.832499 }, at: { lat: 50.198551, lon: 15.832242 } },
+  { id: 'u-dvora', name: 'U Dvora', pre: { lat: 50.197518, lon: 15.833574 }, at: { lat: 50.197105, lon: 15.834599 } },
+  { id: 'pricna', name: 'Příčná', pre: { lat: 50.194482, lon: 15.835869 }, at: { lat: 50.192795, lon: 15.835422 } },
+  { id: 'trebes-skolka', name: 'Třebeš, školka', pre: { lat: 50.191587, lon: 15.834723 }, at: { lat: 50.190025, lon: 15.833376 } }
+];
+const POD = { id: 'podzami', name: 'Podzámčí', pre: { lat: 50.187364, lon: 15.832238 } };
+const L16_TAIL = [
+  { id: 'nove-podzami', name: 'Nové Podzámčí', request: true, pre: { lat: 50.183410, lon: 15.827967 }, at: { lat: 50.182232, lon: 15.828308 } },
+  { id: 'zamecek', name: 'Zámeček', request: true, pre: { lat: 50.180350, lon: 15.827382 }, at: { lat: 50.177994, lon: 15.828027 } },
+  { id: 'park-golf', name: 'Park Golf', request: true, pre: { lat: 50.176835, lon: 15.828459 }, at: { lat: 50.175400, lon: 15.829021 } },
+  { id: 'roudnicka-u-rybnika', name: 'Roudnička, U rybníka', request: true, pre: { lat: 50.173556, lon: 15.829448 }, at: { lat: 50.172104, lon: 15.828440 } }
+];
+const ROUD = { id: 'roudnicka', name: 'Roudnička', pre: { lat: 50.170209, lon: 15.827106 }, at: { lat: 50.169006, lon: 15.827122 } };
 // Body platí jen pro jeden směr. 1602 má zatím jen názvy, souřadnice pošle uživatel zvlášť.
 Object.assign(DEMO, {
-  '1601': { label: '16', name: 'Linka 16', directions: [{ headsign: 'Hlavní nádraží', stops: L16.map(s => ({ ...s, ...C1601[s.id] })) }] },
+  '1601': { label: '16', name: 'Linka 16', directions: [
+    { headsign: 'Hlavní nádraží', stops: [...L16_HEAD, HN_END] },
+    { headsign: 'Podzámčí', stops: [...L16_HEAD, HN_THRU, ...L16_MID, { ...POD, at: { lat: 50.184681, lon: 15.829773 } }] },
+    { headsign: 'Roudnička', stops: [...L16_HEAD, HN_THRU, ...L16_MID, { ...POD, at: { lat: 50.184627, lon: 15.829236 } }, ...L16_TAIL, ROUD] }
+  ] },
   '1602': { label: '16', name: 'Linka 16', directions: [{ headsign: 'Kozlovka', stops: L16.slice().reverse() }] }
 });
 
@@ -364,49 +411,151 @@ function render() {
   drawMap();
 }
 
-// Mapa: dlaždice OpenStreetMap pod vlastní SVG vrstvou. Počítá se webový Mercator, zoom se přizpůsobí trase.
-let mapState = null, mapGen = 0;
+// Mapa: dlaždice OpenStreetMap pod vlastní SVG vrstvou. Webový Mercator, zoom je plynulý.
+// Pohled = střed (cx0, cy0 v pixelech světa při zoomu 0) a zoom zf. Jde přibližovat (tlačítka, kolečko, dvojklik, štípnutí),
+// posouvat tažením a sledovat vozidlo.
+let mapState = null, mapFollow = false;
+const view = { zf: 14, cx0: 0, cy0: 0, minZf: 1, fit: null, touched: false };
+const MAXZ = 18;
 const mercX = (lon, z) => (lon + 180) / 360 * 256 * 2 ** z;
 const mercY = (lat, z) => { const s = Math.sin(lat * Math.PI / 180); return (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * 256 * 2 ** z; };
 
-function layoutMap() {
-  const box = $('mapbox'), tiles = $('tiles'), note = $('mapNote');
-  const gen = ++mapGen;
-  tiles.textContent = ''; note.hidden = true; $('attrib').hidden = true;
+function fitView() {
+  const box = $('mapbox'), W = box.clientWidth || 320, H = box.clientHeight || 260, pad = 30;
   const pts = cur.trig && cur.trig.length ? cur.trig : cur.geo;
-  if (!pts || !pts.length) { mapState = null; return; }
-  const W = box.clientWidth || 320, H = box.clientHeight || 260, pad = 30;
+  if (!pts || !pts.length) return null;
   const xs = pts.map(p => mercX(p.lon, 0)), ys = pts.map(p => mercY(p.lat, 0));
   const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
   const fit = Math.min((W - 2 * pad) / ((maxX - minX) || 1e-9), (H - 2 * pad) / ((maxY - minY) || 1e-9));
-  const zf = Math.max(1, Math.min(17, Math.log2(fit)));
-  const cx = (minX + maxX) / 2 * 2 ** zf, cy = (minY + maxY) / 2 * 2 ** zf;
-  const left = cx - W / 2, top = cy - H / 2;
-  mapState = { W, H, zf, left, top };
-  if (cur.virtual) { note.textContent = 'Zastávky této linky zatím nemají souřadnice, schéma je vymyšlené a mapa se nezobrazuje.'; note.hidden = false; return; }
-  $('attrib').hidden = false;
-  const zt = Math.floor(zf), ts = 256 * 2 ** (zf - zt), n = 2 ** zt;
-  const x0 = Math.floor(left / ts), x1 = Math.floor((left + W) / ts);
-  const y0 = Math.max(0, Math.floor(top / ts)), y1 = Math.min(n - 1, Math.floor((top + H) / ts));
-  let total = 0, loaded = 0, failed = 0;
-  const settle = () => {
-    if (gen !== mapGen || loaded + failed < total) return;
-    if (loaded === 0) { note.textContent = 'Podkladová mapa se v tomhle okně nenačetla, protože ho prohlížeč omezuje. Na vlastním webu přes https se zobrazí. Trasa se kreslí i bez ní.'; note.hidden = false; $('attrib').hidden = true; }
-  };
-  const imgs = [];
-  for (let ty = y0; ty <= y1; ty++) for (let tx = x0; tx <= x1; tx++) imgs.push([tx, ty]);
-  total = imgs.length;
-  imgs.forEach(([tx, ty]) => {
-    const img = document.createElement('img');
-    img.alt = ''; img.draggable = false;
-    img.style.left = (tx * ts - left) + 'px'; img.style.top = (ty * ts - top) + 'px';
-    img.style.width = img.style.height = (ts + 0.5) + 'px';
-    img.onload = () => { loaded++; settle(); };
-    img.onerror = () => { failed++; img.remove(); settle(); };
-    img.src = 'https://tile.openstreetmap.org/' + zt + '/' + (((tx % n) + n) % n) + '/' + ty + '.png';
-    tiles.appendChild(img);
-  });
+  return { zf: Math.max(1, Math.min(17, Math.log2(fit))), cx0: (minX + maxX) / 2, cy0: (minY + maxY) / 2 };
 }
+
+// Dlaždice: každá má svůj zoom z a souřadnice x, y a při každé změně pohledu se jen přepočítá poloha.
+// Dlaždice staršího zoomu zůstanou chvíli pod novými, aby při přibližování neblikaly bílé plochy.
+const tileEls = new Map(), failedTiles = new Set();
+let tilePending = 0, tileLoaded = 0, tileFailed = 0, tileCleanup = null, tilesBlocked = false;
+function resetTiles() { $('tiles').textContent = ''; tileEls.clear(); failedTiles.clear(); tilePending = tileLoaded = tileFailed = 0; tilesBlocked = false; }
+function tileSettled() {
+  const note = $('mapNote');
+  if (tilePending === 0 && tileLoaded === 0 && tileFailed > 0) {
+    note.textContent = 'Podkladová mapa se v tomhle okně nenačetla, protože ho prohlížeč omezuje. Na vlastním webu přes https se zobrazí. Trasa se kreslí i bez ní.';
+    note.hidden = false; $('attrib').hidden = true; tilesBlocked = true; // dál se dlaždice nezkouší
+  } else if (tileLoaded > 0) { note.hidden = true; }
+}
+function updateTiles() {
+  const m = mapState; if (!m || cur.virtual || tilesBlocked) return;
+  const zt = Math.max(0, Math.min(19, Math.floor(m.zf))), n = 2 ** zt, ts = 256 * 2 ** (m.zf - zt);
+  const x0 = Math.floor(m.left / ts), x1 = Math.floor((m.left + m.W) / ts);
+  const y0 = Math.max(0, Math.floor(m.top / ts)), y1 = Math.min(n - 1, Math.floor((m.top + m.H) / ts));
+  const need = new Set(), layer = $('tiles');
+  for (let ty = y0; ty <= y1; ty++) for (let tx = x0; tx <= x1; tx++) {
+    const key = zt + '/' + tx + '/' + ty; need.add(key);
+    if (tileEls.has(key) || failedTiles.has(key)) continue;
+    const img = document.createElement('img');
+    img.alt = ''; img.draggable = false; img._t = { z: zt, x: tx, y: ty, key };
+    tilePending++;
+    img.onload = () => { tilePending--; tileLoaded++; tileSettled(); };
+    img.onerror = () => { tilePending--; tileFailed++; failedTiles.add(key); img.remove(); tileEls.delete(key); tileSettled(); };
+    img.src = 'https://tile.openstreetmap.org/' + zt + '/' + (((tx % n) + n) % n) + '/' + ty + '.png';
+    layer.appendChild(img); tileEls.set(key, img);
+  }
+  tileEls.forEach((img, key) => {
+    const t = img._t, size = 256 * 2 ** (m.zf - t.z);
+    if (t.z === zt && !need.has(key)) { img.remove(); tileEls.delete(key); return; }
+    img.style.left = (t.x * size - m.left) + 'px'; img.style.top = (t.y * size - m.top) + 'px';
+    img.style.width = img.style.height = (size + 0.5) + 'px';
+  });
+  clearTimeout(tileCleanup);
+  tileCleanup = setTimeout(() => {
+    const z = Math.max(0, Math.min(19, Math.floor(view.zf)));
+    tileEls.forEach((img, key) => { if (img._t.z !== z) { img.remove(); tileEls.delete(key); } });
+  }, 600);
+}
+
+function applyView() {
+  const box = $('mapbox'), W = box.clientWidth || 320, H = box.clientHeight || 260;
+  view.zf = Math.max(view.minZf, Math.min(MAXZ, view.zf));
+  const s = 2 ** view.zf;
+  mapState = { W, H, zf: view.zf, left: view.cx0 * s - W / 2, top: view.cy0 * s - H / 2 };
+  updateTiles(); drawMap();
+}
+function syncMapButtons() { $('btnFollow').setAttribute('aria-pressed', String(mapFollow)); }
+
+// Nový směr nebo linka: celá trasa a nové dlaždice.
+function layoutMap() {
+  resetTiles(); const note = $('mapNote'); note.hidden = true; $('attrib').hidden = true;
+  const f = fitView();
+  if (!f) { mapState = null; $('svg').textContent = ''; return; }
+  view.fit = f; view.zf = f.zf; view.cx0 = f.cx0; view.cy0 = f.cy0; view.minZf = Math.max(1, f.zf - 2); view.touched = false;
+  mapFollow = false; syncMapButtons();
+  if (cur.virtual) { note.textContent = 'Zastávky této linky zatím nemají souřadnice, schéma je vymyšlené a mapa se nezobrazuje.'; note.hidden = false; }
+  else $('attrib').hidden = false;
+  applyView();
+}
+
+// Zoom kolem bodu (mx, my) v pixelech mapy: bod pod prstem zůstane na místě.
+function zoomAt(mx, my, newZf) {
+  const s = 2 ** view.zf, wx = (mapState.left + mx) / s, wy = (mapState.top + my) / s;
+  view.zf = Math.max(view.minZf, Math.min(MAXZ, newZf));
+  const s2 = 2 ** view.zf;
+  view.cx0 = wx - (mx - mapState.W / 2) / s2; view.cy0 = wy - (my - mapState.H / 2) / s2;
+  view.touched = true;
+}
+function panBy(dx, dy) { const s = 2 ** view.zf; view.cx0 -= dx / s; view.cy0 -= dy / s; view.touched = true; }
+function followBus() {
+  if (!mapFollow || !run.pos || !mapState) return;
+  view.cx0 = mercX(run.pos.lon, 0); view.cy0 = mercY(run.pos.lat, 0); applyView();
+}
+
+(function setupMapControls() {
+  const box = $('mapbox'), ptrs = new Map();
+  let pinch = null, raf = 0;
+  const rel = e => { const r = box.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+  const redraw = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; applyView(); }); };
+  box.addEventListener('pointerdown', e => {
+    if (e.target.closest('.mapctl, .attrib') || !mapState) return;
+    try { box.setPointerCapture(e.pointerId); } catch (x) {}
+    ptrs.set(e.pointerId, rel(e)); pinch = null;
+  });
+  box.addEventListener('pointermove', e => {
+    if (!ptrs.has(e.pointerId) || !mapState) return;
+    const p = rel(e), old = ptrs.get(e.pointerId); ptrs.set(e.pointerId, p);
+    if (ptrs.size === 1) {
+      const dx = p.x - old.x, dy = p.y - old.y; if (!dx && !dy) return;
+      panBy(dx, dy);
+      if (mapFollow) { mapFollow = false; syncMapButtons(); }
+    } else if (ptrs.size === 2) {
+      const [a, b] = [...ptrs.values()];
+      const cur2 = { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      if (pinch) { zoomAt(cur2.x, cur2.y, view.zf + Math.log2(cur2.d / pinch.d)); panBy(cur2.x - pinch.x, cur2.y - pinch.y); }
+      pinch = cur2;
+    }
+    redraw();
+  });
+  const end = e => { ptrs.delete(e.pointerId); pinch = null; };
+  box.addEventListener('pointerup', end); box.addEventListener('pointercancel', end);
+  box.addEventListener('wheel', e => {
+    if (!mapState) return; e.preventDefault();
+    const p = rel(e), d = e.deltaY * (e.deltaMode === 1 ? 16 : 1);
+    zoomAt(p.x, p.y, view.zf - d * 0.004); redraw();
+  }, { passive: false });
+  box.addEventListener('dblclick', e => {
+    if (e.target.closest('.mapctl, .attrib') || !mapState) return;
+    const p = rel(e); zoomAt(p.x, p.y, view.zf + 1); redraw();
+  });
+  $('btnZoomIn').addEventListener('click', () => { if (!mapState) return; zoomAt(mapState.W / 2, mapState.H / 2, view.zf + 1); applyView(); });
+  $('btnZoomOut').addEventListener('click', () => { if (!mapState) return; zoomAt(mapState.W / 2, mapState.H / 2, view.zf - 1); applyView(); });
+  $('btnFit').addEventListener('click', () => {
+    if (!view.fit) return;
+    view.zf = view.fit.zf; view.cx0 = view.fit.cx0; view.cy0 = view.fit.cy0; view.touched = false;
+    mapFollow = false; syncMapButtons(); applyView();
+  });
+  $('btnFollow').addEventListener('click', () => {
+    if (!mapState) return;
+    mapFollow = !mapFollow; syncMapButtons();
+    if (mapFollow) { if (view.zf < 15) view.zf = 16; view.touched = true; if (run.pos) followBus(); else applyView(); }
+  });
+})();
 
 function drawMap() {
   const svg = $('svg'); svg.textContent = '';
@@ -449,7 +598,7 @@ function partsFor(kind, i) {
   // group = jedna hotová nahrávka "příští + název", když není, hlásí se zvlášť fráze a název
   const grp = (prefix, head) => ({ keys: nk.map(k => prefix + '-' + k), group: [head, name], text: head.text + ' – ' + s.name });
   if (kind === 'next') {
-    if (i === 0) return [{ keys: ['pocatecni', 'pocatecni-zastavka'], text: 'Počáteční zastávka' }, name, ...req];
+    if (i === 0) return [name, ...req]; // první zastávka se hlásí jen názvem, bez fráze
     return [grp('pristi', { keys: ['pristi'], text: 'Příští zastávka' }), ...req];
   }
   if (last) return [grp('konecna', { keys: ['konecna'], text: 'Konečná zastávka' }), { keys: ['vystupte', 'prosime-vystupte', 'prosim-vystupte'], text: 'Prosíme, vystupte', suffix: true }];
@@ -541,6 +690,7 @@ function handleEvents(evs) {
 function onPos(pos) {
   run.pos = pos;
   handleEvents(stepT(run.st, cur.trig, pos, Number($('radius').value) || 50));
+  followBus();
   render();
 }
 function stopRun(keepMsg) {
@@ -553,9 +703,9 @@ function stopRun(keepMsg) {
 }
 function beginRun(mode) {
   stopRun(); ttsDead = false; run.on = true; run.mode = mode;
-  // Začátek: "Počáteční zastávka" se hlásí hned, spouštěč první zastávky se přeskočí.
+  // Začátek: hlásí se jen linka a směr. První zastávka je konečná, ta se neříká, její spouštěč se přeskočí.
   run.st = { k: 1, idx: 0, atStop: true }; run.pos = null; run.dwell = 0;
-  announce([{ keys: ['linka'], text: 'Linka ' + (LINES[cur.code].label || cur.code) + ', směr ' + $('dest').textContent }, ...partsFor('next', 0)]);
+  announce([{ keys: ['linka'], text: 'Linka ' + (LINES[cur.code].label || cur.code) + ', směr ' + $('dest').textContent }]);
 }
 function startSim() {
   beginRun('sim'); $('btnSim').setAttribute('aria-pressed', 'true');
@@ -609,9 +759,59 @@ $('fileLines').addEventListener('change', async e => {
     setStatus('Načteno linek: ' + codes.length + '.');
   } catch (err) { setStatus('Soubor se nepodařilo načíst: ' + err.message); }
 });
-$('fileAudio').addEventListener('change', e => {
-  Array.from(e.target.files).forEach(f => { audioMap[slug(f.name.replace(/\.[^.]+$/, ''))] = URL.createObjectURL(f); });
-  setStatus('Vlastní hlášení: ' + Object.keys(audioMap).length + ' souborů.');
+// Vybrané nahrávky se uloží do prohlížeče (IndexedDB), takže po zavření stránky zůstanou.
+const audioDb = {
+  open() {
+    return new Promise((res, rej) => {
+      const r = indexedDB.open('hlaseni-audio', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('files');
+      r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+    });
+  },
+  async run(mode, fn) {
+    const db = await this.open();
+    return new Promise((res, rej) => {
+      const tx = db.transaction('files', mode), st = tx.objectStore('files');
+      const out = fn(st);
+      tx.oncomplete = () => { db.close(); res(out && out.result !== undefined ? out.result : out); };
+      tx.onerror = tx.onabort = () => { db.close(); rej(tx.error); };
+    });
+  },
+  put(name, blob) { return this.run('readwrite', st => { st.put(blob, name); }); },
+  all() {
+    return this.run('readonly', st => { const k = st.getAllKeys(), v = st.getAll(); return { get result() { return k.result.map((n, i) => [n, v.result[i]]); } }; });
+  },
+  clear() { return this.run('readwrite', st => { st.clear(); }); }
+};
+const audioKey = name => slug(name.replace(/\.[^.]+$/, ''));
+$('fileAudio').addEventListener('change', async e => {
+  const files = Array.from(e.target.files);
+  files.forEach(f => { audioMap[audioKey(f.name)] = URL.createObjectURL(f); });
+  let saved = 0;
+  try { for (const f of files) { await audioDb.put(f.name, f); saved++; } } catch (err) { /* úložiště nemusí být dostupné */ }
+  setStatus(saved === files.length
+    ? 'Uloženo ' + saved + ' nahrávek. Zůstanou v tomhle prohlížeči i po zavření stránky.'
+    : 'Nahrávky platí jen do zavření stránky, prohlížeč je neuložil.');
+});
+async function loadSavedAudio() {
+  try {
+    const rows = await audioDb.all();
+    rows.forEach(([name, blob]) => { audioMap[audioKey(name)] = URL.createObjectURL(blob); });
+    if (rows.length) setStatus('Načteno uložených nahrávek: ' + rows.length + '.');
+  } catch (e) { /* bez uložených nahrávek jede syntéza */ }
+}
+let clearArmed = null;
+$('btnClearAudio').addEventListener('click', async e => {
+  const b = e.target;
+  if (!clearArmed) {
+    b.textContent = 'Opravdu smazat? Klepni znovu';
+    clearArmed = setTimeout(() => { clearArmed = null; b.textContent = 'Smazat uložené nahrávky'; }, 4000);
+    return;
+  }
+  clearTimeout(clearArmed); clearArmed = null; b.textContent = 'Smazat uložené nahrávky';
+  try { await audioDb.clear(); } catch (err) {}
+  Object.keys(audioMap).forEach(k => { if (/^blob:/.test(audioMap[k])) delete audioMap[k]; });
+  setStatus('Uložené nahrávky jsou smazané.');
 });
 
 function pickVoice() {
@@ -642,6 +842,6 @@ async function loadRepoAudio() {
   } catch (e) { /* bez nahrávek jede syntéza */ }
 }
 
-fillLines(); chooseLine('1601'); loadRepoAudio();
-if (window.ResizeObserver) new ResizeObserver(() => { if (Math.abs(($('mapbox').clientWidth || 0) - (mapState ? mapState.W : 0)) > 1) { layoutMap(); drawMap(); } }).observe($('mapbox'));
+fillLines(); chooseLine('1601'); loadSavedAudio(); loadRepoAudio();
+if (window.ResizeObserver) new ResizeObserver(() => { const w = $('mapbox').clientWidth || 0; if (mapState && Math.abs(w - mapState.W) > 1) { if (view.touched) applyView(); else layoutMap(); } }).observe($('mapbox'));
 </script>
