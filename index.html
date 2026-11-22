@@ -169,7 +169,7 @@ details .inner { display: grid; gap: 12px; margin-top: 12px; }
       <div class="field">
         <label for="fileAudio">Vlastní hlášení (audio soubory)</label>
         <input type="file" id="fileAudio" accept="audio/*" multiple>
-        <p class="hint">Název souboru je ID zastávky nebo její název bez diakritiky, např. <code>hlavni-nadrazi.mp3</code>. Pro fráze použij <code>pristi.mp3</code>, <code>pocatecni.mp3</code>, <code>znameni.mp3</code>, <code>konecna.mp3</code> a <code>vystupte.mp3</code>, pro gong <code>gong.mp3</code>. Co chybí, přečte syntéza řeči.</p>
+        <p class="hint">Název souboru: zastávka je její název (např. <code>Hlavní nádraží.mp3</code>), „příští“ je <code>příští Hlavní nádraží.mp3</code>, konečná je <code>konečná Hlavní nádraží.mp3</code>. Diakritika, velká písmena a mezery nevadí. Navíc jde přidat <code>na znamení</code>, <code>prosíme vystupte</code>, <code>počáteční</code> a <code>gong</code>. Co chybí, přečte syntéza řeči. Na GitHub Pages se soubory ze složky <code>audio</code> v repozitáři načtou samy.</p>
       </div>
       <p class="hint" id="voiceInfo"></p>
     </div>
@@ -435,18 +435,30 @@ function drawMap() {
 }
 
 /* ---------- hlášení ---------- */
+// Názvy souborů: zastávka = její název, "příští" = pristi-<název>, "konečná" = konecna-<název>.
+// Diakritika, velká písmena a mezery nevadí, porovnává se zjednodušený tvar (slug).
+function nameKeys(s) {
+  const a = slug(s.name);
+  return [...new Set([a, s.id, a.replace(/^svobodne-dvory-/, '')].filter(Boolean))];
+}
 function partsFor(kind, i) {
-  const s = cur.stops[i];
-  const name = { key: s.id, alt: slug(s.name), text: s.name, say: s.say };
-  const req = s.request ? [{ key: 'znameni', text: 'Zastávka na znamení' }] : [];
+  const s = cur.stops[i], last = i === cur.stops.length - 1;
+  const nk = nameKeys(s);
+  const name = { keys: nk, text: s.name, say: s.say };
+  const req = s.request ? [{ keys: ['znameni', 'na-znameni', 'zastavka-na-znameni'], text: 'Zastávka na znamení', suffix: true }] : [];
+  // group = jedna hotová nahrávka "příští + název", když není, hlásí se zvlášť fráze a název
+  const grp = (prefix, head) => ({ keys: nk.map(k => prefix + '-' + k), group: [head, name], text: head.text + ' – ' + s.name });
   if (kind === 'next') {
-    const head = i === 0 ? { key: 'pocatecni', text: 'Počáteční zastávka' } : { key: 'pristi', text: 'Příští zastávka' };
-    return [head, name, ...req];
+    if (i === 0) return [{ keys: ['pocatecni', 'pocatecni-zastavka'], text: 'Počáteční zastávka' }, name, ...req];
+    return [grp('pristi', { keys: ['pristi'], text: 'Příští zastávka' }), ...req];
   }
-  if (i === cur.stops.length - 1) return [{ key: 'konecna', text: 'Konečná zastávka' }, name, { key: 'vystupte', text: 'Prosíme, vystupte' }];
+  if (last) return [grp('konecna', { keys: ['konecna'], text: 'Konečná zastávka' }), { keys: ['vystupte', 'prosime-vystupte', 'prosim-vystupte'], text: 'Prosíme, vystupte', suffix: true }];
   return [name, ...req];
 }
-function findAudio(p) { return audioMap[slug(p.key)] || (p.alt && audioMap[p.alt]) || null; }
+function findAudio(p) {
+  for (const k of p.keys || []) { const u = audioMap[slug(k)]; if (u) return u; }
+  return null;
+}
 
 function speakTts(text) {
   return new Promise(res => {
@@ -499,11 +511,20 @@ async function announce(parts) {
   const my = speakToken;
   pending++;
   const job = queue.then(async () => {
+    let usedFile = false;
+    const playPart = async p => { const url = findAudio(p); if (url) { usedFile = true; await playUrl(url); } else await speakTts(p.say || p.text); };
     for (const p of parts) {
       if (my !== speakToken) break;
       if (p.gong) { const gu = audioMap['gong']; if (gu) await playUrl(gu); else await synthGong(); continue; }
-      const url = findAudio(p);
-      if (url) await playUrl(url); else await speakTts(p.say || p.text);
+      if (p.group) {
+        const gurl = findAudio(p);
+        if (gurl) { usedFile = true; await playUrl(gurl); }
+        else for (const q of p.group) { if (my !== speakToken) break; await playPart(q); }
+        continue;
+      }
+      // Když zní vlastní nahrávka, doplňující věta (na znamení, vystupte) se nedomlouvá syntézou, jen z vlastního souboru.
+      if (p.suffix && usedFile && !findAudio(p)) continue;
+      await playPart(p);
     }
   }).catch(() => {}).finally(() => { pending--; });
   queue = job;
@@ -534,7 +555,7 @@ function beginRun(mode) {
   stopRun(); ttsDead = false; run.on = true; run.mode = mode;
   // Začátek: "Počáteční zastávka" se hlásí hned, spouštěč první zastávky se přeskočí.
   run.st = { k: 1, idx: 0, atStop: true }; run.pos = null; run.dwell = 0;
-  announce([{ key: 'linka', text: 'Linka ' + (LINES[cur.code].label || cur.code) + ', směr ' + $('dest').textContent }, ...partsFor('next', 0)]);
+  announce([{ keys: ['linka'], text: 'Linka ' + (LINES[cur.code].label || cur.code) + ', směr ' + $('dest').textContent }, ...partsFor('next', 0)]);
 }
 function startSim() {
   beginRun('sim'); $('btnSim').setAttribute('aria-pressed', 'true');
@@ -589,7 +610,6 @@ $('fileLines').addEventListener('change', async e => {
   } catch (err) { setStatus('Soubor se nepodařilo načíst: ' + err.message); }
 });
 $('fileAudio').addEventListener('change', e => {
-  audioMap = {};
   Array.from(e.target.files).forEach(f => { audioMap[slug(f.name.replace(/\.[^.]+$/, ''))] = URL.createObjectURL(f); });
   setStatus('Vlastní hlášení: ' + Object.keys(audioMap).length + ' souborů.');
 });
@@ -603,6 +623,25 @@ function pickVoice() {
 if ('speechSynthesis' in window) { window.speechSynthesis.onvoiceschanged = pickVoice; }
 pickVoice();
 
-fillLines(); chooseLine('1601');
+// Na GitHub Pages se nahrávky ze složky audio v repozitáři najdou samy přes veřejné API GitHubu.
+async function loadRepoAudio() {
+  try {
+    const host = location.hostname;
+    if (!/\.github\.io$/.test(host)) return;
+    const owner = host.split('.')[0];
+    const seg = location.pathname.split('/').filter(Boolean)[0];
+    const repo = seg && !/\.html?$/.test(seg) ? seg : host;
+    const r = await fetch('https://api.github.com/repos/' + owner + '/' + repo + '/contents/audio');
+    if (!r.ok) return;
+    const list = await r.json();
+    let n = 0;
+    list.forEach(f => {
+      if (f.type === 'file' && /\.(mp3|m4a|ogg|wav|aac|opus)$/i.test(f.name)) { audioMap[slug(f.name.replace(/\.[^.]+$/, ''))] = 'audio/' + encodeURIComponent(f.name); n++; }
+    });
+    if (n) setStatus('Načteno hlášení ze složky audio: ' + n + ' souborů.');
+  } catch (e) { /* bez nahrávek jede syntéza */ }
+}
+
+fillLines(); chooseLine('1601'); loadRepoAudio();
 if (window.ResizeObserver) new ResizeObserver(() => { if (Math.abs(($('mapbox').clientWidth || 0) - (mapState ? mapState.W : 0)) > 1) { layoutMap(); drawMap(); } }).observe($('mapbox'));
 </script>
