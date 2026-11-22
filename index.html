@@ -1,0 +1,608 @@
+<title>Hlášení zastávek</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@600;700&display=swap">
+<style>
+/* Layout: a vehicle-display strip on top, the big next-stop readout, a schematic route, then the stop list and settings. */
+:root {
+  --bg: #eceff0;
+  --surface: #ffffff;
+  --fg: #12181b;
+  --muted: #56636a;
+  --line: #d2d9dc;
+  --accent: #a85f00;
+  --accent-fg: #ffffff;
+  --ok: #1d8a52;
+  /* Mapa je vždy světlá, jako podkladové dlaždice OpenStreetMap. */
+  --map-bg: #e6eaec; --map-ink: #2f3b41; --map-route: #2f3b41; --map-done: #d97706; --map-halo: #ffffff;
+  --font-display: "Barlow Condensed", "Arial Narrow", sans-serif;
+  --font-body: "Barlow", system-ui, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1214; --surface: #171c1f; --fg: #eef1ee; --muted: #8e9a9f;
+    --line: #2a3337; --accent: #ffb000; --accent-fg: #1a1200; --ok: #4fd18b;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1214; --surface: #171c1f; --fg: #eef1ee; --muted: #8e9a9f;
+  --line: #2a3337; --accent: #ffb000; --accent-fg: #1a1200; --ok: #4fd18b;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 16px; line-height: 1.45;
+  padding-block: 16px 40px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.wrap { max-width: 640px; margin: 0 auto; display: grid; gap: 16px; }
+.tag { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.demo-note { font-size: 13px; color: var(--muted); border-left: 3px solid var(--accent); padding: 2px 0 2px 10px; }
+
+.head { display: flex; gap: 12px; align-items: center; min-width: 0; }
+.badge { font-family: var(--font-display); font-weight: 700; font-size: 34px; line-height: 1; background: var(--accent); color: var(--accent-fg); padding: 8px 12px; min-width: 56px; text-align: center; border-radius: 4px; }
+.head .dest { min-width: 0; }
+.head .dest b { display: block; font-family: var(--font-display); font-size: 22px; font-weight: 600; overflow-wrap: anywhere; }
+
+.board { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 16px; display: grid; gap: 6px; }
+.board .next { font-family: var(--font-display); font-weight: 700; font-size: clamp(34px, 10vw, 52px); line-height: 1.05; overflow-wrap: anywhere; }
+.board .dist { font-variant-numeric: tabular-nums; color: var(--muted); }
+.board .now { margin-top: 8px; padding-top: 10px; border-top: 1px solid var(--line); min-height: 2.9em; }
+.board .now span { color: var(--accent); font-weight: 600; }
+
+.map { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.mapbox { position: relative; height: 260px; background: var(--map-bg); overflow: hidden; }
+.tiles { position: absolute; inset: 0; }
+.tiles img { position: absolute; max-width: none; user-select: none; -webkit-user-drag: none; }
+.mapbox svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.attrib { position: absolute; right: 0; bottom: 0; font-size: 10px; line-height: 1.5; background: rgba(255,255,255,.85); color: #2f3b41; padding: 0 6px; text-decoration: none; }
+.mapnote { margin: 0; padding: 8px 12px; }
+.m-case { fill: none; stroke: var(--map-halo); stroke-width: 8; stroke-linecap: round; stroke-linejoin: round; opacity: .9; }
+.m-route { fill: none; stroke: var(--map-route); stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
+.m-done { fill: none; stroke: var(--map-done); stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
+.m-pre { fill: var(--map-halo); stroke: var(--map-ink); stroke-width: 1.5; }
+.m-stop { fill: var(--map-halo); stroke: var(--map-ink); stroke-width: 2.5; }
+.m-stop.passed { fill: var(--map-done); }
+.m-ring { fill: none; stroke: var(--map-done); stroke-width: 3; }
+.m-bus { fill: var(--map-done); stroke: var(--map-halo); stroke-width: 3; }
+.m-label { fill: var(--map-ink); font: 600 11px var(--font-body); paint-order: stroke; stroke: var(--map-halo); stroke-width: 3.5px; stroke-linejoin: round; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; }
+.field { display: grid; gap: 4px; min-width: 0; flex: 1 1 140px; }
+label { font-size: 13px; color: var(--muted); }
+input[type=text], input[type=number], select { font: inherit; color: var(--fg); background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 10px; min-width: 0; width: 100%; }
+button { font: inherit; font-weight: 600; cursor: pointer; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); padding: 11px 14px; flex: 1 1 auto; }
+button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+button[aria-pressed="true"] { outline: 2px solid var(--accent); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.stops { list-style: none; margin: 0; padding: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.stops li button { width: 100%; text-align: left; border: 0; border-radius: 0; background: transparent; display: flex; gap: 12px; align-items: center; padding: 11px 14px; font-weight: 500; }
+.stops li + li button { border-top: 1px solid var(--line); }
+.stops .dot { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--muted); flex: none; }
+.stops .name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.stops .meta { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.stops li.passed button { color: var(--muted); }
+.stops li.passed .dot { background: var(--muted); }
+.stops li.next .dot { border-color: var(--accent); background: var(--accent); }
+.stops li.next button { font-weight: 600; }
+.stops li.at .dot { border-color: var(--ok); background: var(--ok); }
+
+details { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+summary { cursor: pointer; font-weight: 600; }
+details .inner { display: grid; gap: 12px; margin-top: 12px; }
+.hint { font-size: 13px; color: var(--muted); margin: 0; }
+.status { font-size: 13px; color: var(--muted); min-height: 1.4em; }
+</style>
+
+<div class="wrap">
+  <div>
+    <div class="tag">Prototyp</div>
+    <div class="demo-note">Linka 1601 má skutečné body zastávek a funguje i s GPS. Linka 1602 zatím souřadnice nemá, její simulace jede po vymyšlené trase a GPS se zapne po doplnění bodů „příští zastávka“ a „jsme na zastávce“. T1 je testovací linka s vymyšlenými souřadnicemi.</div>
+  </div>
+
+  <div class="head">
+    <div class="badge" id="badge">T1</div>
+    <div class="dest"><span class="tag">Směr</span><b id="dest">…</b></div>
+  </div>
+
+  <section class="board" aria-live="polite">
+    <span class="tag" id="nextLabel">Příští zastávka</span>
+    <div class="next" id="next">–</div>
+    <div class="dist" id="dist"></div>
+    <div class="now" id="now"></div>
+  </section>
+
+  <section class="map" aria-label="Mapa trasy">
+    <div class="mapbox" id="mapbox">
+      <div class="tiles" id="tiles"></div>
+      <svg id="svg" role="img" aria-label="Trasa linky s polohou vozidla"></svg>
+      <a class="attrib" id="attrib" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener" hidden>© OpenStreetMap</a>
+    </div>
+    <p class="hint mapnote" id="mapNote" hidden></p>
+  </section>
+
+  <section class="row" aria-label="Volba linky">
+    <div class="field">
+      <label for="lineIn">Kód linky</label>
+      <input type="text" id="lineIn" list="lineList" autocomplete="off" inputmode="text" value="1601">
+      <datalist id="lineList"></datalist>
+    </div>
+    <div class="field">
+      <label for="dirSel">Směr</label>
+      <select id="dirSel"></select>
+    </div>
+  </section>
+
+  <section class="row" aria-label="Spuštění">
+    <button class="primary" id="btnSim">Simulace jízdy</button>
+    <button id="btnGps">Sledovat GPS</button>
+    <button id="btnStop">Zastavit</button>
+  </section>
+  <div class="status" id="status" role="status"></div>
+
+  <ul class="stops" id="stopList"></ul>
+
+  <details>
+    <summary>Nastavení</summary>
+    <div class="inner">
+      <div class="row">
+        <div class="field">
+          <label for="radius">Okruh zastávky (m)</label>
+          <input type="number" id="radius" value="50" min="15" max="150" step="5">
+        </div>
+        <div class="field">
+          <label for="speed">Rychlost simulace</label>
+          <select id="speed"><option value="1">1×</option><option value="5" selected>5×</option><option value="15">15×</option></select>
+        </div>
+      </div>
+      <div class="row">
+        <button id="btnSound" aria-pressed="true">Hlas zapnutý</button>
+        <button id="btnGong" aria-pressed="false">Gong vypnutý</button>
+        <button id="btnTest">Zkusit hlas</button>
+      </div>
+      <div class="field">
+        <label for="fileLines">Vlastní linky (linky.json)</label>
+        <input type="file" id="fileLines" accept=".json,application/json">
+        <p class="hint">U každé zastávky v každém směru jdou zadat dva body: <code>"pre": {"lat":…, "lon":…}</code> pro hlášení „příští zastávka“ a <code>"at": {"lat":…, "lon":…}</code> pro hlášení samotné zastávky. Bez <code>pre</code> se použije střed mezi předchozí a touto zastávkou.</p>
+      </div>
+      <div class="field">
+        <label for="fileAudio">Vlastní hlášení (audio soubory)</label>
+        <input type="file" id="fileAudio" accept="audio/*" multiple>
+        <p class="hint">Název souboru je ID zastávky nebo její název bez diakritiky, např. <code>hlavni-nadrazi.mp3</code>. Pro fráze použij <code>pristi.mp3</code>, <code>pocatecni.mp3</code>, <code>znameni.mp3</code>, <code>konecna.mp3</code> a <code>vystupte.mp3</code>, pro gong <code>gong.mp3</code>. Co chybí, přečte syntéza řeči.</p>
+      </div>
+      <p class="hint" id="voiceInfo"></p>
+    </div>
+  </details>
+</div>
+
+<script>
+//#PURE-START
+function hav(a, b) {
+  const R = 6371000, rad = Math.PI / 180;
+  const dLat = (b.lat - a.lat) * rad, dLon = (b.lon - a.lon) * rad;
+  const x = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(x));
+}
+const OK = p => !!p && Number.isFinite(p.lat) && Number.isFinite(p.lon);
+// Poloha zastávky: pole "at", případně starší lat/lon.
+function atOf(s) { return OK(s.at) ? s.at : (OK(s) ? { lat: s.lat, lon: s.lon } : null); }
+// Spouštěče hlášení v pořadí jízdy: zastávka 0, pak pro každou další "pre" (příští zastávka) a "at" (jsme na zastávce).
+// Chybí-li u zastávky "pre", vezme se střed mezi předchozí a touto zastávkou.
+function buildTriggers(stops) {
+  const out = [];
+  for (let i = 0; i < stops.length; i++) {
+    const at = atOf(stops[i]); if (!at) return null;
+    if (i > 0) {
+      let pre = OK(stops[i].pre) ? stops[i].pre : null;
+      if (!pre) { const prev = out[out.length - 1]; pre = { lat: (prev.lat + at.lat) / 2, lon: (prev.lon + at.lon) / 2 }; }
+      out.push({ type: 'pre', i, lat: pre.lat, lon: pre.lon });
+    }
+    out.push({ type: 'at', i, lat: at.lat, lon: at.lon });
+  }
+  return out;
+}
+// st = {k, idx, atStop}: k je další spouštěč, idx zobrazená zastávka. Spustí se první spouštěč v okruhu
+// (z následujících tří, aby se přeskočený bod nezasekl) a st se změní.
+function stepT(st, trig, pos, R) {
+  const ev = [];
+  for (let j = st.k; j < Math.min(st.k + 3, trig.length); j++) {
+    if (hav(pos, trig[j]) <= R) {
+      const t = trig[j];
+      st.k = j + 1; st.idx = t.i; st.atStop = t.type === 'at';
+      ev.push({ type: t.type, i: t.i });
+      break;
+    }
+  }
+  return ev;
+}
+function slug(s) {
+  return String(s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+}
+function pathPos(stops, cum, dist) {
+  if (dist <= 0) return { lat: stops[0].lat, lon: stops[0].lon };
+  const total = cum[cum.length - 1];
+  if (dist >= total) { const l = stops[stops.length - 1]; return { lat: l.lat, lon: l.lon }; }
+  let i = 1; while (cum[i] < dist) i++;
+  const t = (dist - cum[i - 1]) / (cum[i] - cum[i - 1]);
+  return { lat: stops[i - 1].lat + (stops[i].lat - stops[i - 1].lat) * t, lon: stops[i - 1].lon + (stops[i].lon - stops[i - 1].lon) * t };
+}
+//#PURE-END
+
+// Testovací data. Souřadnice a názvy jsou vymyšlené, nahraď je souborem linky.json.
+const DEMO = {
+  T1: {
+    name: 'Testovací linka',
+    directions: [{
+      headsign: 'Konečná',
+      stops: [
+        { id: 'z1', name: 'Náměstí', lat: 50.2092, lon: 15.8328 },
+        { id: 'z2', name: 'Divadlo', lat: 50.2120, lon: 15.8370 },
+        { id: 'z3', name: 'Městský park', lat: 50.2148, lon: 15.8415 },
+        { id: 'z4', name: 'Základní škola', lat: 50.2170, lon: 15.8470 },
+        { id: 'z5', name: 'Nemocnice', lat: 50.2190, lon: 15.8530 },
+        { id: 'z6', name: 'Sídliště', lat: 50.2225, lon: 15.8570 },
+        { id: 'z7', name: 'Konečná', lat: 50.2260, lon: 15.8620 }
+      ]
+    }]
+  }
+};
+
+// Linka 16: názvy zastávek podle zadání. "request" = zastávka na znamení.
+const L16 = [
+  { id: 'kozlovka', name: 'Kozlovka' },
+  { id: 'sd-spojovaci', name: 'Svobodné Dvory, Spojovací', request: true },
+  { id: 'sd-skola', name: 'Svobodné Dvory, škola' },
+  { id: 'delnicky-dum', name: 'Dělnický dům' },
+  { id: 'dvorska', name: 'Dvorská', request: true },
+  { id: 'svobodne-dvory', name: 'Svobodné Dvory' },
+  { id: 'zelenina', name: 'Zelenina' },
+  { id: 'kavak', name: 'Kavák', request: true },
+  { id: 'zizkov', name: 'Žižkov', request: true },
+  { id: 'zvu', name: 'ZVU', say: 'zet, vé, ú' },
+  { id: 'hlavni-nadrazi', name: 'Hlavní nádraží' }
+];
+// Linka 1601 (Kozlovka → Hlavní nádraží): pre = bod, kde se hlásí "příští zastávka", at = bod samotné zastávky.
+const C1601 = {
+  kozlovka: { at: { lat: 50.230448, lon: 15.781925 } },
+  "sd-spojovaci": { pre: { lat: 50.229782, lon: 15.781272 }, at: { lat: 50.228231, lon: 15.780364 } },
+  "sd-skola": { pre: { lat: 50.225794, lon: 15.779739 }, at: { lat: 50.222036, lon: 15.781125 } },
+  "delnicky-dum": { pre: { lat: 50.222389, lon: 15.784762 }, at: { lat: 50.222307, lon: 15.787434 } },
+  dvorska: { pre: { lat: 50.221953, lon: 15.789739 }, at: { lat: 50.220917, lon: 15.793179 } },
+  "svobodne-dvory": { pre: { lat: 50.220541, lon: 15.795072 }, at: { lat: 50.219802, lon: 15.798361 } },
+  zelenina: { pre: { lat: 50.219345, lon: 15.801051 }, at: { lat: 50.218974, lon: 15.805496 } },
+  kavak: { pre: { lat: 50.218975, lon: 15.807972 }, at: { lat: 50.217210, lon: 15.806622 } },
+  zizkov: { pre: { lat: 50.216586, lon: 15.805327 }, at: { lat: 50.215178, lon: 15.803141 } },
+  zvu: { pre: { lat: 50.211602, lon: 15.804239 }, at: { lat: 50.209987, lon: 15.806161 } },
+  "hlavni-nadrazi": { pre: { lat: 50.210922, lon: 15.808874 }, at: { lat: 50.212933, lon: 15.812482 } }
+};
+// Body platí jen pro jeden směr. 1602 má zatím jen názvy, souřadnice pošle uživatel zvlášť.
+Object.assign(DEMO, {
+  '1601': { label: '16', name: 'Linka 16', directions: [{ headsign: 'Hlavní nádraží', stops: L16.map(s => ({ ...s, ...C1601[s.id] })) }] },
+  '1602': { label: '16', name: 'Linka 16', directions: [{ headsign: 'Kozlovka', stops: L16.slice().reverse() }] }
+});
+
+const $ = id => document.getElementById(id);
+let LINES = DEMO;
+let cur = { code: '1601', dirIdx: 0, stops: [], geo: [], trig: [], virtual: false, cum: [], tcum: [] };
+const freshSt = () => ({ k: 0, idx: 0, atStop: false });
+let run = { on: false, mode: null, st: freshSt(), pos: null, watchId: null, timer: null, simDist: 0, dwell: 0, lastMsg: '' };
+let soundOn = true, gongOn = false, ttsDead = false, audioMap = {}, speakToken = 0, czVoice = null;
+
+function getDirs(code) { return (LINES[code] && LINES[code].directions) || []; }
+
+function fillLines() {
+  const dl = $('lineList'); dl.textContent = '';
+  Object.keys(LINES).forEach(c => { const o = document.createElement('option'); o.value = c; dl.appendChild(o); });
+}
+function fillDirs() {
+  const sel = $('dirSel'); sel.textContent = '';
+  getDirs(cur.code).forEach((d, i) => {
+    const o = document.createElement('option'); o.value = i; o.textContent = '→ ' + (d.headsign || d.stops[d.stops.length - 1].name); sel.appendChild(o);
+  });
+}
+function chooseLine(code) {
+  stopRun();
+  if (!LINES[code]) { setStatus('Linka „' + code + '“ v datech není.'); return; }
+  cur.code = code; fillDirs(); chooseDir(0);
+  $('badge').textContent = LINES[code].label || code;
+}
+function chooseDir(i) {
+  stopRun();
+  const d = getDirs(cur.code)[i]; if (!d) return;
+  cur.dirIdx = i; cur.stops = d.stops;
+  // Zastávky bez souřadnic dostanou vymyšlenou trasu (po 400 m), jen aby šlo hlášení zkoušet v simulaci.
+  cur.virtual = !cur.stops.every(s => atOf(s));
+  const vgeo = cur.stops.map((s, k) => ({ lat: 50.2 + k * 0.0036, lon: 15.83 + Math.sin(k * 0.8) * 0.004 }));
+  cur.geo = cur.virtual ? vgeo : cur.stops.map(atOf);
+  cur.trig = buildTriggers(cur.virtual ? cur.stops.map((s, k) => ({ id: s.id, name: s.name, at: vgeo[k] })) : cur.stops);
+  cur.cum = [0];
+  for (let k = 1; k < cur.geo.length; k++) cur.cum.push(cur.cum[k - 1] + hav(cur.geo[k - 1], cur.geo[k]));
+  cur.tcum = [0];
+  for (let k = 1; k < cur.trig.length; k++) cur.tcum.push(cur.tcum[k - 1] + hav(cur.trig[k - 1], cur.trig[k]));
+  $('dest').textContent = d.headsign || cur.stops[cur.stops.length - 1].name;
+  $('dirSel').value = String(i);
+  run.st = freshSt(); run.pos = null; run.simDist = 0; run.lastMsg = '';
+  layoutMap();
+  render();
+}
+
+function setStatus(t) { $('status').textContent = t; }
+
+function render() {
+  const stops = cur.stops, st = run.st;
+  const nextEl = $('next'), lbl = $('nextLabel');
+  if (st.idx >= stops.length) { lbl.textContent = 'Konec trasy'; nextEl.textContent = 'Konečná'; $('dist').textContent = ''; }
+  else {
+    lbl.textContent = st.atStop ? (st.idx === stops.length - 1 ? 'Konečná zastávka' : 'Zastávka') : (st.idx === 0 && !run.on ? 'První zastávka' : 'Příští zastávka');
+    nextEl.textContent = stops[st.idx].name;
+    $('dist').textContent = run.pos && !cur.virtual ? 'Vzdálenost ' + Math.round(hav(run.pos, cur.geo[st.idx])) + ' m' : (stops[st.idx].request ? 'Zastávka na znamení' : '');
+  }
+  $('now').innerHTML = run.lastMsg ? '<span>Hlášení:</span> ' : '';
+  if (run.lastMsg) $('now').appendChild(document.createTextNode(run.lastMsg));
+
+  const ul = $('stopList'); ul.textContent = '';
+  stops.forEach((s, i) => {
+    const li = document.createElement('li');
+    if (i < st.idx || st.idx >= stops.length) li.className = 'passed';
+    else if (i === st.idx) li.className = st.atStop ? 'at' : 'next';
+    const b = document.createElement('button'); b.type = 'button';
+    const dot = document.createElement('span'); dot.className = 'dot';
+    const nm = document.createElement('span'); nm.className = 'name'; nm.textContent = s.name;
+    const mt = document.createElement('span'); mt.className = 'meta';
+    mt.textContent = s.request ? 'na znamení' : (cur.virtual ? '' : (cur.cum[i] / 1000).toFixed(1).replace('.', ',') + ' km');
+    b.append(dot, nm, mt);
+    b.title = 'Nastavit jako příští zastávku';
+    b.addEventListener('click', () => {
+      const k = i === 0 ? 0 : 2 * i - 1; // spouštěč "příští zastávka" této zastávky
+      run.st = { k, idx: i, atStop: false }; run.lastMsg = '';
+      if (run.mode === 'sim') run.simDist = Math.max(0, cur.tcum[k] - 150);
+      render();
+    });
+    li.appendChild(b); ul.appendChild(li);
+  });
+  drawMap();
+}
+
+// Mapa: dlaždice OpenStreetMap pod vlastní SVG vrstvou. Počítá se webový Mercator, zoom se přizpůsobí trase.
+let mapState = null, mapGen = 0;
+const mercX = (lon, z) => (lon + 180) / 360 * 256 * 2 ** z;
+const mercY = (lat, z) => { const s = Math.sin(lat * Math.PI / 180); return (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * 256 * 2 ** z; };
+
+function layoutMap() {
+  const box = $('mapbox'), tiles = $('tiles'), note = $('mapNote');
+  const gen = ++mapGen;
+  tiles.textContent = ''; note.hidden = true; $('attrib').hidden = true;
+  const pts = cur.trig && cur.trig.length ? cur.trig : cur.geo;
+  if (!pts || !pts.length) { mapState = null; return; }
+  const W = box.clientWidth || 320, H = box.clientHeight || 260, pad = 30;
+  const xs = pts.map(p => mercX(p.lon, 0)), ys = pts.map(p => mercY(p.lat, 0));
+  const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+  const fit = Math.min((W - 2 * pad) / ((maxX - minX) || 1e-9), (H - 2 * pad) / ((maxY - minY) || 1e-9));
+  const zf = Math.max(1, Math.min(17, Math.log2(fit)));
+  const cx = (minX + maxX) / 2 * 2 ** zf, cy = (minY + maxY) / 2 * 2 ** zf;
+  const left = cx - W / 2, top = cy - H / 2;
+  mapState = { W, H, zf, left, top };
+  if (cur.virtual) { note.textContent = 'Zastávky této linky zatím nemají souřadnice, schéma je vymyšlené a mapa se nezobrazuje.'; note.hidden = false; return; }
+  $('attrib').hidden = false;
+  const zt = Math.floor(zf), ts = 256 * 2 ** (zf - zt), n = 2 ** zt;
+  const x0 = Math.floor(left / ts), x1 = Math.floor((left + W) / ts);
+  const y0 = Math.max(0, Math.floor(top / ts)), y1 = Math.min(n - 1, Math.floor((top + H) / ts));
+  let total = 0, loaded = 0, failed = 0;
+  const settle = () => {
+    if (gen !== mapGen || loaded + failed < total) return;
+    if (loaded === 0) { note.textContent = 'Podkladová mapa se v tomhle okně nenačetla, protože ho prohlížeč omezuje. Na vlastním webu přes https se zobrazí. Trasa se kreslí i bez ní.'; note.hidden = false; $('attrib').hidden = true; }
+  };
+  const imgs = [];
+  for (let ty = y0; ty <= y1; ty++) for (let tx = x0; tx <= x1; tx++) imgs.push([tx, ty]);
+  total = imgs.length;
+  imgs.forEach(([tx, ty]) => {
+    const img = document.createElement('img');
+    img.alt = ''; img.draggable = false;
+    img.style.left = (tx * ts - left) + 'px'; img.style.top = (ty * ts - top) + 'px';
+    img.style.width = img.style.height = (ts + 0.5) + 'px';
+    img.onload = () => { loaded++; settle(); };
+    img.onerror = () => { failed++; img.remove(); settle(); };
+    img.src = 'https://tile.openstreetmap.org/' + zt + '/' + (((tx % n) + n) % n) + '/' + ty + '.png';
+    tiles.appendChild(img);
+  });
+}
+
+function drawMap() {
+  const svg = $('svg'); svg.textContent = '';
+  const m = mapState; if (!m || !cur.trig.length) return;
+  svg.setAttribute('viewBox', '0 0 ' + m.W + ' ' + m.H);
+  const ns = 'http://www.w3.org/2000/svg';
+  const mk = (tag, attrs) => { const e = document.createElementNS(ns, tag); for (const a in attrs) e.setAttribute(a, attrs[a]); svg.appendChild(e); return e; };
+  const P = p => [mercX(p.lon, m.zf) - m.left, mercY(p.lat, m.zf) - m.top];
+  const line = pts => pts.map(P).map(q => q[0].toFixed(1) + ',' + q[1].toFixed(1)).join(' ');
+  const st = run.st;
+  mk('polyline', { class: 'm-case', points: line(cur.trig) });
+  mk('polyline', { class: 'm-route', points: line(cur.trig) });
+  if (st.k - 1 >= 1) mk('polyline', { class: 'm-done', points: line(cur.trig.slice(0, st.k)) });
+  cur.trig.forEach(t => { if (t.type === 'pre') { const q = P(t); mk('circle', { class: 'm-pre', cx: q[0], cy: q[1], r: 3 }); } });
+  cur.geo.forEach((g, i) => {
+    const q = P(g), passed = i < st.idx || (i === st.idx && st.atStop);
+    mk('circle', { class: 'm-stop' + (passed ? ' passed' : ''), cx: q[0], cy: q[1], r: 6 });
+    if (i === st.idx) mk('circle', { class: 'm-ring', cx: q[0], cy: q[1], r: 10 });
+    if (i === 0 || i === cur.geo.length - 1 || i === st.idx) {
+      const right = q[0] > m.W - 90, left = q[0] < 60;
+      const t = mk('text', { class: 'm-label', x: q[0] + (right ? -12 : left ? 12 : 0), y: q[1] - 13, 'text-anchor': right ? 'end' : left ? 'start' : 'middle' });
+      t.textContent = cur.stops[i].name;
+    }
+  });
+  if (run.pos) { const q = P(run.pos); mk('circle', { class: 'm-bus', cx: q[0], cy: q[1], r: 8 }); }
+}
+
+/* ---------- hlášení ---------- */
+function partsFor(kind, i) {
+  const s = cur.stops[i];
+  const name = { key: s.id, alt: slug(s.name), text: s.name, say: s.say };
+  const req = s.request ? [{ key: 'znameni', text: 'Zastávka na znamení' }] : [];
+  if (kind === 'next') {
+    const head = i === 0 ? { key: 'pocatecni', text: 'Počáteční zastávka' } : { key: 'pristi', text: 'Příští zastávka' };
+    return [head, name, ...req];
+  }
+  if (i === cur.stops.length - 1) return [{ key: 'konecna', text: 'Konečná zastávka' }, name, { key: 'vystupte', text: 'Prosíme, vystupte' }];
+  return [name, ...req];
+}
+function findAudio(p) { return audioMap[slug(p.key)] || (p.alt && audioMap[p.alt]) || null; }
+
+function speakTts(text) {
+  return new Promise(res => {
+    if (ttsDead || !('speechSynthesis' in window)) return res();
+    const u = new SpeechSynthesisUtterance(text); u.lang = 'cs-CZ'; if (czVoice) u.voice = czVoice;
+    let done = false, started = false; const fin = () => { if (!done) { done = true; res(); } };
+    u.onstart = () => { started = true; };
+    u.onend = fin; u.onerror = fin;
+    // Když hlas do 1,5 s nezačne, zařízení nebo okno ho blokuje: dál se hlásí jen textem a gongem.
+    setTimeout(() => {
+      if (!started && !done) { ttsDead = true; setStatus('Hlas se nespustil, zařízení nebo okno náhledu ho blokuje. Hlášení běží jen textem a gongem.'); fin(); }
+    }, 1500);
+    setTimeout(fin, 8000);
+    try { window.speechSynthesis.speak(u); } catch (e) { fin(); }
+  });
+}
+function playUrl(url) {
+  return new Promise(res => {
+    const a = new Audio(url); a.onended = () => res(); a.onerror = () => res();
+    a.play().catch(() => res());
+  });
+}
+// Vlastní krátký dvoutónový zvonek. Pravý gong z vozidel je nahrávka, kterou si můžeš nahrát jako gong.mp3.
+let actx = null;
+function synthGong() {
+  return new Promise(res => {
+    try {
+      actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+      if (actx.state === 'suspended') actx.resume();
+      const t = actx.currentTime;
+      [[659.25, 0], [523.25, 0.35]].forEach(([f, o]) => {
+        const osc = actx.createOscillator(), g = actx.createGain();
+        osc.type = 'sine'; osc.frequency.value = f;
+        g.gain.setValueAtTime(0.0001, t + o);
+        g.gain.linearRampToValueAtTime(0.35, t + o + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + o + 1.1);
+        osc.connect(g); g.connect(actx.destination);
+        osc.start(t + o); osc.stop(t + o + 1.2);
+      });
+      setTimeout(res, 1000);
+    } catch (e) { res(); }
+  });
+}
+// Hlášení se řadí za sebou, nové nepřeruší to, co právě zní. Simulace počká, až dozní.
+let queue = Promise.resolve(), pending = 0;
+async function announce(parts) {
+  run.lastMsg = parts.map(p => p.text).join(' – ');
+  if (!soundOn) return;
+  if (gongOn) parts = [{ key: 'gong', text: '', gong: true }, ...parts];
+  const my = speakToken;
+  pending++;
+  const job = queue.then(async () => {
+    for (const p of parts) {
+      if (my !== speakToken) break;
+      if (p.gong) { const gu = audioMap['gong']; if (gu) await playUrl(gu); else await synthGong(); continue; }
+      const url = findAudio(p);
+      if (url) await playUrl(url); else await speakTts(p.say || p.text);
+    }
+  }).catch(() => {}).finally(() => { pending--; });
+  queue = job;
+  return job;
+}
+function handleEvents(evs) {
+  evs.forEach(e => {
+    if (e.type === 'at') { announce(partsFor('arrive', e.i)); if (run.mode === 'sim') run.dwell = 3500 / Number($('speed').value); }
+    else if (e.type === 'pre') announce(partsFor('next', e.i));
+  });
+}
+
+/* ---------- běh ---------- */
+function onPos(pos) {
+  run.pos = pos;
+  handleEvents(stepT(run.st, cur.trig, pos, Number($('radius').value) || 50));
+  render();
+}
+function stopRun(keepMsg) {
+  if (run.timer) clearInterval(run.timer);
+  if (run.watchId != null && navigator.geolocation) navigator.geolocation.clearWatch(run.watchId);
+  run.timer = null; run.watchId = null; run.on = false;
+  speakToken++; try { window.speechSynthesis && window.speechSynthesis.cancel(); } catch (e) {}
+  if (!keepMsg) setStatus('');
+  $('btnSim').setAttribute('aria-pressed', 'false'); $('btnGps').setAttribute('aria-pressed', 'false');
+}
+function beginRun(mode) {
+  stopRun(); ttsDead = false; run.on = true; run.mode = mode;
+  // Začátek: "Počáteční zastávka" se hlásí hned, spouštěč první zastávky se přeskočí.
+  run.st = { k: 1, idx: 0, atStop: true }; run.pos = null; run.dwell = 0;
+  announce([{ key: 'linka', text: 'Linka ' + (LINES[cur.code].label || cur.code) + ', směr ' + $('dest').textContent }, ...partsFor('next', 0)]);
+}
+function startSim() {
+  beginRun('sim'); $('btnSim').setAttribute('aria-pressed', 'true');
+  setStatus('Simulace jede po trase. Zastávku můžeš v seznamu přepnout klepnutím.');
+  run.simDist = -120; // kus před první zastávkou
+  run.timer = setInterval(() => {
+    if (pending > 0) return;
+    if (run.dwell > 0) { run.dwell -= 250; return; }
+    const f = Number($('speed').value);
+    run.simDist += 8.3 * f * 0.25; // ~30 km/h
+    onPos(pathPos(cur.trig, cur.tcum, run.simDist));
+    if (run.simDist > cur.tcum[cur.tcum.length - 1] + 8 * f) { stopRun(true); setStatus('Simulace dojela na konečnou.'); }
+  }, 250);
+}
+function startGps() {
+  if (cur.virtual) { setStatus('Tahle linka zatím nemá souřadnice zastávek, GPS by neměla co porovnávat. Použij simulaci.'); return; }
+  if (!navigator.geolocation) { setStatus('Tenhle prohlížeč GPS nenabízí. Použij simulaci.'); return; }
+  beginRun('gps'); $('btnGps').setAttribute('aria-pressed', 'true');
+  setStatus('Čekám na polohu…');
+  run.watchId = navigator.geolocation.watchPosition(
+    p => { setStatus('GPS v pořádku, přesnost asi ' + Math.round(p.coords.accuracy) + ' m.'); onPos({ lat: p.coords.latitude, lon: p.coords.longitude }); },
+    err => { setStatus('GPS tady není dostupná (' + (err && err.message ? err.message : 'odepřeno') + '). V okně náhledu bývá zablokovaná, otevři aplikaci na vlastním webu přes https. Zatím použij simulaci.'); stopRun(true); },
+    { enableHighAccuracy: true, maximumAge: 1000, timeout: 20000 }
+  );
+}
+
+/* ---------- události ---------- */
+$('btnSim').addEventListener('click', startSim);
+$('btnGps').addEventListener('click', startGps);
+$('btnStop').addEventListener('click', () => { stopRun(); run.st = freshSt(); run.pos = null; run.lastMsg = ''; render(); });
+$('lineIn').addEventListener('change', e => chooseLine(e.target.value.trim()));
+$('dirSel').addEventListener('change', e => chooseDir(Number(e.target.value)));
+$('btnSound').addEventListener('click', e => {
+  soundOn = !soundOn; e.target.setAttribute('aria-pressed', String(soundOn)); e.target.textContent = soundOn ? 'Hlas zapnutý' : 'Hlas vypnutý';
+  if (!soundOn) { speakToken++; try { window.speechSynthesis && window.speechSynthesis.cancel(); } catch (x) {} }
+});
+$('btnGong').addEventListener('click', e => {
+  gongOn = !gongOn; e.target.setAttribute('aria-pressed', String(gongOn)); e.target.textContent = gongOn ? 'Gong zapnutý' : 'Gong vypnutý';
+});
+$('btnTest').addEventListener('click', () => { const was = soundOn; soundOn = true; ttsDead = false; announce(partsFor('next', Math.min(1, cur.stops.length - 1))).then(() => { soundOn = was; }); });
+
+$('fileLines').addEventListener('change', async e => {
+  const f = e.target.files[0]; if (!f) return;
+  try {
+    const data = JSON.parse(await f.text());
+    const codes = Object.keys(data);
+    if (!codes.length) throw new Error('prázdný soubor');
+    codes.forEach(c => { if (!Array.isArray(data[c].directions)) throw new Error('linka ' + c + ' nemá směry'); });
+    LINES = data; fillLines();
+    $('lineIn').value = codes[0]; chooseLine(codes[0]);
+    setStatus('Načteno linek: ' + codes.length + '.');
+  } catch (err) { setStatus('Soubor se nepodařilo načíst: ' + err.message); }
+});
+$('fileAudio').addEventListener('change', e => {
+  audioMap = {};
+  Array.from(e.target.files).forEach(f => { audioMap[slug(f.name.replace(/\.[^.]+$/, ''))] = URL.createObjectURL(f); });
+  setStatus('Vlastní hlášení: ' + Object.keys(audioMap).length + ' souborů.');
+});
+
+function pickVoice() {
+  if (!('speechSynthesis' in window)) { $('voiceInfo').textContent = 'Tenhle prohlížeč neumí syntézu řeči, funguje jen text a vlastní audio.'; return; }
+  const vs = window.speechSynthesis.getVoices();
+  czVoice = vs.find(v => /^cs/i.test(v.lang)) || null;
+  $('voiceInfo').textContent = czVoice ? 'Český hlas: ' + czVoice.name : 'Český hlas v zařízení nevidím, použije se výchozí. Čeština se doinstaluje v nastavení telefonu.';
+}
+if ('speechSynthesis' in window) { window.speechSynthesis.onvoiceschanged = pickVoice; }
+pickVoice();
+
+fillLines(); chooseLine('1601');
+if (window.ResizeObserver) new ResizeObserver(() => { if (Math.abs(($('mapbox').clientWidth || 0) - (mapState ? mapState.W : 0)) > 1) { layoutMap(); drawMap(); } }).observe($('mapbox'));
+</script>
